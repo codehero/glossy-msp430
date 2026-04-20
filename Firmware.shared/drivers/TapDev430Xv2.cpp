@@ -13,6 +13,18 @@ ALWAYS_INLINE bool UsesFr2xxFr4xxXv2Map(JtagId jtag_id)
 	return jtag_id == kMsp_98;
 }
 
+ALWAYS_INLINE bool IsFullEmulationState(uint16_t ctrl_sig)
+{
+	return (ctrl_sig & 0x0301) != 0;
+}
+
+bool RestoreFullEmulationState()
+{
+	g_Player.Play(kIrDr16(IR_CNTRL_SIG_16BIT, 0x0501));
+	g_Player.itf_->OnPulseTclkN();
+	return IsFullEmulationState(g_Player.GetCtrlSigReg());
+}
+
 ALWAYS_INLINE uint16_t GetXv2WatchdogAddress(JtagId jtag_id)
 {
 	return UsesFr2xxFr4xxXv2Map(jtag_id) ? WDT_ADDR_FR41XX : WDT_ADDR_XV2;
@@ -163,6 +175,9 @@ bool TapDev430Xv2::SyncJtagAssertPorSaveContext(CpuContext &ctx, const ChipProfi
 		kIrDr16(IR_CNTRL_SIG_CAPTURE, 0x0000),
 	};
 	g_Player.Play(steps_03, _countof(steps_03));
+
+	if (!IsFullEmulationState(g_Player.GetCtrlSigReg()))
+		return false;
 
 	// hold Watchdog Timer
 	ctx.wdt_ = ReadWord(address);
@@ -403,13 +418,14 @@ bool TapDev430Xv2::SyncJtagConditionalSaveContext(CpuContext &ctx, const ChipPro
 		// shift out current control signal register value
 		pipe_empty = (g_Player.DR_Shift16(0) & CNTRL_SIG_CPUSUSP) != 0;
 		g_Player.SetTCLK();		// provide rising clock edge
+		++i;
 	}
 	while (!pipe_empty && i < MaxCyclesForSync);
 
-	//! \todo check error condition
 	if (i >= MaxCyclesForSync)
 	{
-		;
+		Error() << "TapDev430Xv2::SyncJtagConditionalSaveContext: CPU did not reach a pipe-empty state\n";
+		return false;
 	}
 
 	static constexpr TapStep steps_04[] =
@@ -454,11 +470,9 @@ bool TapDev430Xv2::SyncJtagConditionalSaveContext(CpuContext &ctx, const ChipPro
 	};
 	g_Player.Play(steps_05, _countof(steps_05));
 
-	// Hold Watchdog
-	uint16_t wdtval = ctx.wdt_ | WDT_PASSWD;
-	ctx.wdt_ = (uint8_t)TapDev430Xv2::ReadWord(address);	// save WDT value
-	wdtval |= ctx.wdt_;										// adds the WDT stop bit
-	TapDev430Xv2::WriteWord(address, wdtval);
+	// Hold Watchdog while preserving the target's control bits.
+	ctx.wdt_ = (uint8_t)TapDev430Xv2::ReadWord(address);
+	TapDev430Xv2::WriteWord(address, WDT_HOLD | ctx.wdt_);
 
 	ctx.sr_ = GetReg(2);
 	SetReg(2, ctx.sr_ & 0xFFE7);	// clear CPUOFF/GIE bit
@@ -868,6 +882,11 @@ void TapDev430Xv2::ReadWords(address_t address, unaligned_u16 *buf, uint32_t wor
 
 	if (lPc)
 		TapDev430Xv2::SetPC(lPc);
+	if (!RestoreFullEmulationState())
+	{
+		g_TapMcu.failed_ = true;
+		Error() << "TapDev430Xv2::ReadWords: failed to restore Full-Emulation-State\n";
+	}
 	g_Player.SetTCLK();
 }
 #else
@@ -1220,7 +1239,7 @@ void TapDev430Xv2::ReleaseDevice(CpuContext &ctx, const ChipProfile &prof, bool 
 	// Restore status register
 	SetReg(2, ctx.sr_);
 	// Restore watchdog timer
-	WriteWord(GetXv2WatchdogAddress(ctx.jtag_id_), ctx.wdt_);
+	WriteWord(GetXv2WatchdogAddress(ctx.jtag_id_), WDT_PASSWD | ctx.wdt_);
 	
 	address_t pc = ctx.pc_;
 	// check if CPU is OFF, and decrement PC = PC-2
@@ -1290,7 +1309,7 @@ void TapDev430Xv2::ReleaseDevice(CpuContext &ctx, const ChipProfile &prof, bool 
 // Single step
 bool TapDev430Xv2::SingleStep(CpuContext &ctx, const ChipProfile &prof, uint16_t mdbval)
 {
-	bool normal = ((ctx.sr_ & STATUS_REG_CPUOFF) == 0) || (ctx.in_interrupt_ & 0x04);
+	bool normal = ((ctx.sr_ & STATUS_REG_CPUOFF) == 0) || ctx.in_interrupt_;
 	// Stores BKPT 0 information
 	BkptSetting bkpt0;
 

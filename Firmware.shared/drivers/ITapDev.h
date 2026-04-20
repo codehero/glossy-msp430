@@ -92,7 +92,7 @@ struct CpuContext
 	uint32_t eem_version_;
 	// Clock Control (UIF: _hal_mclkCntrl0)
 	uint32_t eem_clk_ctrl_;
-	// Current WDT register value
+	// Saved WDTCTL low byte
 	uint8_t wdt_;
 	// Cached value of the program counter
 	uint32_t pc_;
@@ -300,4 +300,3 @@ public:
 	// Single step
 	virtual bool SingleStep(CpuContext &ctx, const ChipProfile &prof, uint16_t mdbval = kSwBkpInstr) = 0;
 };
-

@@ -327,11 +327,9 @@ bool TapDev430X::SyncJtagConditionalSaveContext(CpuContext &ctx, const ChipProfi
 	if (!InstrLoad())
 		return false;
 
-	// Hold Watchdog
-	uint16_t wdtval = ctx.wdt_ | WDT_PASSWD;
-	ctx.wdt_ = (uint8_t)TapDev430X::ReadWord(address);	// save WDT value
-	wdtval |= ctx.wdt_;									// adds the WDT stop bit
-	TapDev430X::WriteWord(address, wdtval);
+	// Hold Watchdog while preserving the target's control bits.
+	ctx.wdt_ = (uint8_t)TapDev430X::ReadWord(address);
+	TapDev430X::WriteWord(address, WDT_HOLD | ctx.wdt_);
 
 	// set PC to a save address pointing to ROM to avoid RAM corruption on certain devices
 	SetPC(ROM_ADDR);
@@ -375,7 +373,7 @@ void TapDev430X::ReleaseDevice(CpuContext &ctx, const ChipProfile &prof, bool ru
 	// Restore status register
 	SetReg(2, ctx.sr_);
 	// Restore Watchdog Control register
-	WriteWord(WDT_ADDR_CPU, ctx.wdt_);
+	WriteWord(WDT_ADDR_CPU, WDT_PASSWD | ctx.wdt_);
 	// Restore Program Counter
 	SetPC(ctx.pc_);
 	
@@ -891,5 +889,4 @@ void TapDev430X::UpdateEemBreakpoints(Breakpoints &bkpts, const ChipProfile &pro
 /**************************************************************************************/
 /* CPU FLOW CONTROL                                                                   */
 /**************************************************************************************/
-
 

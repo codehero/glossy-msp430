@@ -447,11 +447,9 @@ bool TapDev430::SyncJtagConditionalSaveContext(CpuContext &ctx, const ChipProfil
 	if (!InstrLoad())
 		return false;
 
-	// Hold Watchdog
-	uint16_t wdtval = ctx.wdt_ | WDT_PASSWD;
-	ctx.wdt_ = (uint8_t)TapDev430::ReadWord(address);	// save WDT value
-	wdtval |= ctx.wdt_;									// adds the WDT stop bit
-	TapDev430::WriteWord(address, wdtval);
+	// Hold Watchdog while preserving the target's control bits.
+	ctx.wdt_ = (uint8_t)TapDev430::ReadWord(address);
+	TapDev430::WriteWord(address, WDT_HOLD | ctx.wdt_);
 
 	// set PC to a save address pointing to ROM to avoid RAM corruption on certain devices
 	SetPC(ROM_ADDR);
@@ -527,7 +525,7 @@ void TapDev430::ReleaseDevice(address_t address)
 void TapDev430::ReleaseDevice(CpuContext &ctx, const ChipProfile &prof, bool run_to_bkpt, uint16_t mdbval)
 {
 	SetReg(2, ctx.sr_);
-	WriteWord(WDT_ADDR_CPU, ctx.wdt_);
+	WriteWord(WDT_ADDR_CPU, WDT_PASSWD | ctx.wdt_);
 	SetPC(ctx.pc_);
 	
 	// BLOCK: Workaround for MSP430F149 derivatives
@@ -1414,4 +1412,3 @@ void TapDev430::UpdateEemBreakpoints(Breakpoints &bkpts, const ChipProfile &prof
 	g_Player.itf_->OnDrShift16(BREAKREACT + MX_WRITE);
 	g_Player.itf_->OnDrShift16(breakreact);
 }
-

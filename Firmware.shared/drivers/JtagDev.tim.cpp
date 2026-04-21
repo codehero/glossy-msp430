@@ -226,9 +226,12 @@ void JtagDev::OnClose()
 void JtagDev::OnConnectJtag()
 {
 	// slau320: ConnectJTAG / DrvSignals
+	// Leave the formal 4-wire entry waveform to OnEnterTap()/EnterTapCommon().
+	// Emitting a TEST edge here would duplicate the mode-entry sequence.
 	JtagOn::Enable();
 	SetBusState(BusState::sbw);
-	JTEST::SetHigh();
+	JTEST::SetLow();
+	JRST::SetLow();
 	StopWatch().Delay<Msec(10)>();
 }
 

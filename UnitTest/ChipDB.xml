@@ -357,6 +357,13 @@
 			<register name="CBCTL0" start="0x08C0" value="0x0000" bus="16bit"/>
 		</test-registers>
 	</chip>
+	<chip name="MSP430FR2422" infoa="true" tlv_conflict="false">
+		<memory-map>
+			<memory type="fram" start="0xe300" length = "0x1d00"/>
+			<memory type="fram" start="0x1800" length = "0x100" info="true"/>
+			<memory type="ram" start="0x2000" length = "0x800"/>
+		</memory-map>
+	</chip>
 	<chip name="MSP430FR2476" infoa="true" tlv_conflict="false">
 		<memory-map>
 			<memory type="fram" start="0x8000" length = "0x10000"/>

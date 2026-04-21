@@ -487,23 +487,14 @@ int Gdb::SendSupported(Parser &parser)
 	if (parser.GetCurChar() != ':')
 		return GdbData::InvalidArg(__FUNCTION__, parser.GetCurChar());
 	parser.SkipChar();
-	wide_regs_ = false;
-	// Iterate host features
-	char *arg;
-	while ((arg = parser.GetNextListArg()) != NULL)
-	{
-		/* This is a hack to distinguish msp430-elf-gdb
-		** from msp430-gdb. The former expects 32-bit
-		** register fields.
-		*/
-		if (strcmp(arg, "swbreak+") == 0)
-			wide_regs_ = true;
+	// Consume and ignore host feature list. Register width must be driven by
+	// the target CPU, not guessed from qSupported flags.
+	while (parser.GetNextListArg() != NULL)
 		parser.SkipChar();
-	}
 
 	GdbData response;
 	response <<
-		"PacketSize=" << f::X<1>(GDB_MAX_XFER * 2) // best if this is the first
+		"PacketSize=" << f::X<1>(GDB_MAX_XFER * 2)
 		<< ";QStartNoAckMode+"
 #if OPT_MEMORY_MAP
 		";qXfer:memory-map:read+"
@@ -544,87 +535,81 @@ void Gdb::OneMemMap(GdbData &response, const MemInfo &mem)
 }
 
 
-#if OPT_MEMORY_MAP
 int Gdb::HandleXfer(Parser &parser)
 {
+	const char *object;
+	if (parser.GetCurChar() != ':')
+		goto invalid_syntax;
+	parser.SkipChar();
+
+	object = parser.GetNextArg(":");
+	if (strcmp(object, "features") == 0)
+		return GdbData::Unsupported();
+
+#if OPT_MEMORY_MAP
 	// Order we want to report segments
 	static const ChipInfoDB::EnumMemoryKey memclass[] =
-	{ 
+	{
 		ChipInfoDB::kMkeyMain,
 		ChipInfoDB::kMkeyInfo,
 		ChipInfoDB::kMkeyRam,
 		ChipInfoDB::kMkeyRam2,
 	};
+	if (strcmp(object, "memory-map") == 0)
+	{
+		parser.SkipChar();
+		op = parser.GetNextArg(":");
+		if (strcmp(op, "read") != 0)
+			goto invalid_syntax;
+		parser.SkipChar();
+		annex = parser.GetNextArg(":");
+		if (*annex != 0)
+			goto invalid_syntax;
+		parser.SkipChar();
+		offset = parser.GetUint32(16);
+		if (parser.GetCurChar() != ',')
+			goto invalid_syntax;
+		parser.SkipChar();
+		length = parser.GetUint32(16);
+		(void)length;
 
-	uint32_t offset, length;
-	// Skip ':'
-	parser.SkipChar();
-	// Get 'object'
-	const char *cmd = parser.GetNextArg(":");
-	// Test for unknown object type
-	if(strcmp(cmd, "memory-map") != 0)
-		return GdbData::Unsupported();
-	// Skip ':'
-	parser.SkipChar();
-	// Next token should be "read"
-	cmd = parser.GetNextArg(":");
-	// Malformed command?
-	if (strcmp(cmd, "read") != 0)
-		goto invalid_syntax;
-	// Skip ':'
-	parser.SkipChar();
-	// Next token should be empty
-	cmd = parser.GetNextArg(":");
-	if(*cmd != 0)
-	{
-invalid_syntax:
-		return GdbData::InvalidArg(__FUNCTION__, parser.GetArg());
-	}
-	// Skip ':'
-	parser.SkipChar();
-	offset = parser.GetUint32();	// ignored
-	// Skip ','
-	parser.SkipChar();
-	length = parser.GetUint32();	// ignored
-	GdbData response;
-	/*
-	** Issue that may happen: We are not honoring the 'length' input argument.
-	** This is an issue. Hopefully length will always be greater than out response...
-	** Just in case, we respond only to "offset 0".
-	*/
-	if (offset == 0)
-	{
-		response <<
-			"l"	// data
-			"<?xml version=\"1.0\"?>\n"
-			"<!DOCTYPE memory-map PUBLIC \" +//IDN gnu.org//DTD GDB Memory Map V1.0//EN\" \"http://sourceware.org/gdb/gdb-memory-map.dtd\">\n"
-			"<memory-map>\n"
-			;
-	}
-	else
-	{
-		// Just in case: No more packet to come
-		response << 'l';	// EOF
-	}
-	const ChipProfile &prof = g_TapMcu.GetChipProfile();
-	for (int j = 0; j < _countof(memclass); ++j)
-	{
-		ChipInfoDB::EnumMemoryKey what = memclass[j];
-		for (int i = 0; i < _countof(prof.mem_); ++i)
+		GdbData response;
+		if (offset == 0)
 		{
-			const MemInfo &mem = prof.mem_[i];
-			if (mem.valid_ == false)
-				break;
-			if (mem.class_ == what)
-				OneMemMap(response, mem);
+			response <<
+				"l"
+				"<?xml version=\"1.0\"?>\n"
+				"<!DOCTYPE memory-map PUBLIC \" +//IDN gnu.org//DTD GDB Memory Map V1.0//EN\" \"http://sourceware.org/gdb/gdb-memory-map.dtd\">\n"
+				"<memory-map>\n"
+				;
 		}
+		else
+		{
+			response << 'l';
+		}
+		const ChipProfile &prof = g_TapMcu.GetChipProfile();
+		for (int j = 0; j < _countof(memclass); ++j)
+		{
+			ChipInfoDB::EnumMemoryKey what = memclass[j];
+			for (int i = 0; i < _countof(prof.mem_); ++i)
+			{
+				const MemInfo &mem = prof.mem_[i];
+				if (mem.valid_ == false)
+					break;
+				if (mem.class_ == what)
+					OneMemMap(response, mem);
+			}
+		}
+		response << "</memory-map>\n";
+		return response.FlushAck();
 	}
-	response <<
-		"</memory-map>\n"
-		;
-	return response.FlushAck();
+#endif
+
+	return GdbData::Unsupported();
+
+invalid_syntax:
+	return GdbData::InvalidArg(__FUNCTION__, parser.GetArg());
 }
-#endif	// OPT_MEMORY_MAP
 
 
 class CToggleLed
@@ -686,9 +671,7 @@ int Gdb::ProcessCommand(char *buf_p, int len)
 		{"Symbol", NULL},
 		{"TStatus", NULL},
 		{"ThreadExtraInfo", NULL},
-#if OPT_MEMORY_MAP
 		{"Xfer", &Gdb::HandleXfer},
-#endif
 #if OPT_MULTIPROCESS
 		{"fThreadInfo", &Gdb::SendThreadList},
 		{"sThreadInfo", &Gdb::SendThreadListClose},
@@ -841,4 +824,3 @@ int Gdb::Serve()
 	g_TapMcu.Close();
 	return /*data.error_ ? -1 :*/ 0;
 }
-

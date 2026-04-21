@@ -119,13 +119,16 @@ int GdbData::FlushAck()
 			break;
 
 		StopWatch sw(TickTimer::M2T<Timer::Msec(5000)>::kTicks);
+		c = -1;
 		do
 		{
-			if (sw.IsNotElapsed())
-				return -1;
 			c = gUartGdb.GetChar();
+			if (c == '+' || c == '-')
+				break;
 		}
-		while (c != '+' && c != '-');
+		while (sw.IsNotElapsed());
+		if (c != '+' && c != '-')
+			return -1;
 	}
 	while (c != '+');
 	if (GdbData::send_ack_ > 0)
